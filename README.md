@@ -1,57 +1,207 @@
-# Create a Movie Database Service
+# Movie Database Service
 
-### Problem Statement
+A FastAPI service for managing and querying a movie database with support for CSV import/export, background job processing, and real-time progress tracking.
 
-(Expected time commitment: 2-4 hours)
+## Features
 
-Build a FastAPI service that serves as a simple movie database, with the following requirements:
+- **CSV Import**: Upload and import movie data from CSV files
+- **CSV Export**: Download the entire database as a gzipped CSV file
+- **Query Interface**: Search movies by year range and genre
+- **Background Processing**: Long-running operations handled asynchronously with Celery
+- **Progress Tracking**: Poll job status endpoints for real-time progress updates
 
-- Input a movie database CSV from the file `movies.csv`.
-- Support downloading the whole database as a gzipped CSV file.
-- Support query requests by date range and genre.
-- Provide progress updates for long running requests > 2 seconds
+## Prerequisites
 
-Your assignment will be graded on meeting the above requirements, overall performance and responsiveness of your service, efficient management of CPU and memory, and graceful error handling. Outside of the above requirements, you have flexibility in implementation details. Make reasonable design choices and be prepared to explain them.
+- Docker and Docker Compose
 
-### API Surface
+## Getting Started
 
-You should implement endpoints for:
-
-- Submitting the original datafile
-- Downloading the entire dataset
-- Query endpoint for at least date ranges and genres, returning a list of movies
-- Endpoint for real-time updates
-
-### Deliverables
-
-Your submission should include:
-
-- A working FastAPI application
-- A brief explanation of your design choices
-- Instructions on how to build and run your application
-
-# Code Template Instructions
-
-### Installation
-
-Install `uv` and run `uv sync`
-
-### Run
-
-Run the following command at root directory (this will also install dependency)
+Run the application using Docker Compose:
 
 ```bash
-uv run fastapi dev main.py
+# Build and start all services (API, Celery worker, and Redis)
+docker-compose up --build
+
+# Or run in detached mode
+docker-compose up -d --build
 ```
 
-### Add dependencies
+This will start:
+- **FastAPI API** at `http://localhost:8000`
+- **Celery Worker** for background task processing
+- **Redis** for Celery broker and result backend
 
-If you need any other packages, just use `uv` to add them
+Access the API documentation at:
+- Swagger UI: `http://localhost:8000/docs`
+- ReDoc: `http://localhost:8000/redoc`
+
+### Docker Commands
 
 ```bash
-uv add some_other_package
+# View logs
+docker-compose logs -f
+
+# Stop all services
+docker-compose down
+
+# Stop and remove volumes
+docker-compose down -v
+
+# Rebuild after code changes
+docker-compose up --build
 ```
 
-### Useful info
+For more Docker details, see [DOCKER.md](DOCKER.md).
 
-Go to `localhost:8000/docs` for the `Swagger` UI
+## API Endpoints
+
+### Upload Movies CSV
+- **PUT** `/movies`
+- Upload a CSV file to import movies into the database
+- **Request**: Multipart form data with CSV file
+- **Response**: `{"job_id": "...", "status": "started"}`
+- Returns a job ID for tracking import progress
+
+### Query Movies
+- **GET** `/movies?start_year={year}&end_year={year}&genre={genre}`
+- Query movies by year range and genre
+- **Parameters**:
+  - `start_year` (required): Start year (inclusive)
+  - `end_year` (required): End year (inclusive)
+  - `genre` (required): Genre to filter by
+- **Response**: Array of movie objects
+
+### Request Movies Export
+- **GET** `/movies/zip`
+- Request export of all movies as a gzipped CSV file
+- **Response**: `{"job_id": "...", "status": "started"}`
+- Returns a job ID for tracking export progress
+
+### Get Job Status
+- **GET** `/jobs/{job_id}/status`
+- Polling endpoint to get the status of a background job
+- **Response**: Job status with progress information
+- **Status values**: `pending`, `in_progress`, `completed`, `failed`
+
+### Download Export File
+- **GET** `/jobs/{job_id}/download`
+- Download the result file from a completed export job
+- **Response**: Gzipped CSV file
+- Only available when job status is `completed`
+
+## Design Choices
+
+### Database: SQLite
+- **Rationale**: Simple, file-based database perfect for a take-home assignment
+- **Migration Path**: The codebase uses SQLModel, making migration to PostgreSQL straightforward (just change the database URL)
+
+### ORM: SQLModel
+- **Rationale**: Combines SQLAlchemy's power with Pydantic's validation
+- **Benefits**:
+  - Type-safe models with automatic validation
+  - Efficient querying with proper indices
+  - Easy serialization for API responses
+  - Database schema management
+
+### Background Jobs: Celery
+- **Rationale**: Industry-standard solution for async task processing
+- **Benefits**:
+  - Handles long-running operations without blocking API
+  - Built-in progress tracking via result backend
+  - Scalable (can run multiple workers)
+  - Reliable task execution with retry capabilities
+
+### Progress Updates: Polling
+- **Rationale**: Simpler implementation than Server-Sent Events (SSE)
+- **Benefits**:
+  - Easy to understand and debug
+  - Works with any HTTP client
+  - No special connection management needed
+- **Trade-off**: Slightly more network overhead than SSE, but acceptable for this use case
+
+### Memory Efficiency
+- **CSV Import**: Streams CSV file in batches (1000 rows at a time) to avoid loading entire file into memory
+- **CSV Export**: Writes directly to gzip file, avoiding intermediate storage
+- **Database Queries**: Uses efficient SQL queries with indices on `year` and `genres` columns
+
+### Error Handling
+- Comprehensive validation for all inputs
+- Graceful error handling with appropriate HTTP status codes
+- Detailed error messages for debugging
+- Database error handling with proper exception catching
+
+## Project Structure
+
+```
+.
+├── app/
+│   ├── __init__.py
+│   ├── celery_app.py      # Celery configuration
+│   ├── database.py         # Database setup and session management
+│   ├── models.py           # SQLModel database models
+│   ├── movies.py           # API endpoints
+│   └── tasks.py            # Celery background tasks
+├── main.py                 # FastAPI application entry point
+├── pyproject.toml          # Project dependencies
+├── Dockerfile              # Docker image definition
+├── docker-compose.yml      # Docker Compose configuration
+├── DOCKER.md               # Docker usage documentation
+├── README.md              # This file
+└── FUTURE_CONSIDERATIONS.md  # Potential improvements
+```
+
+## Example Usage
+
+### 1. Import Movies
+```bash
+curl -X PUT "http://localhost:8000/movies" \
+  -F "file=@movies.csv"
+```
+
+Response:
+```json
+{
+  "job_id": "abc123-def456-...",
+  "status": "started"
+}
+```
+
+### 2. Check Import Progress
+```bash
+curl "http://localhost:8000/jobs/abc123-def456-.../status"
+```
+
+Response:
+```json
+{
+  "job_id": "abc123-def456-...",
+  "status": "in_progress",
+  "progress": 45,
+  "current": 165000,
+  "total": 367315,
+  "message": "Imported 165000 movies..."
+}
+```
+
+### 3. Query Movies
+```bash
+curl "http://localhost:8000/movies?start_year=2020&end_year=2023&genre=Action"
+```
+
+### 4. Export Movies
+```bash
+curl "http://localhost:8000/movies/zip"
+```
+
+### 5. Download Export
+```bash
+curl "http://localhost:8000/jobs/xyz789-abc123-.../download" \
+  -o movies_export.csv.gz
+```
+
+## Future Considerations
+
+See `FUTURE_CONSIDERATIONS.md` for potential enhancements including:
+- Export request data models
+- Filtered exports
+- SSE performance evaluation
