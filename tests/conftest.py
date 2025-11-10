@@ -18,6 +18,7 @@ from main import app
 # Configure Celery to run tasks synchronously in tests
 celery_app.conf.task_always_eager = True
 celery_app.conf.task_eager_propagates = True
+celery_app.conf.task_store_eager_result = True  # Store results so they can be retrieved
 
 
 # Temporary directories will be created per-test
@@ -72,17 +73,21 @@ def client(test_db: str, tmp_path: Path) -> Generator[TestClient, None, None]:
     # Create temporary directories for this test
     test_upload_dir = tmp_path / "uploads"
     test_export_dir = tmp_path / "exports"
+    test_import_logs_dir = tmp_path / "import_logs"
     test_upload_dir.mkdir(exist_ok=True)
     test_export_dir.mkdir(exist_ok=True)
+    test_import_logs_dir.mkdir(exist_ok=True)
     
     # Override the database dependency
     app.dependency_overrides[get_session] = get_test_session
     
-    # Override upload and export directories using patches
+    # Override upload, export, and import_logs directories using patches
     upload_patcher = patch('app.services.UPLOAD_DIR', str(test_upload_dir))
     export_patcher = patch('app.services.EXPORT_DIR', str(test_export_dir))
+    import_logs_patcher = patch('app.services.IMPORT_LOGS_DIR', str(test_import_logs_dir))
     upload_patcher.start()
     export_patcher.start()
+    import_logs_patcher.start()
     
     try:
         yield TestClient(app)
@@ -91,12 +96,16 @@ def client(test_db: str, tmp_path: Path) -> Generator[TestClient, None, None]:
         app.dependency_overrides.clear()
         upload_patcher.stop()
         export_patcher.stop()
+        import_logs_patcher.stop()
         
         # Clean up test directories
         for file_path in test_upload_dir.glob("*"):
             if file_path.is_file():
                 file_path.unlink()
         for file_path in test_export_dir.glob("*"):
+            if file_path.is_file():
+                file_path.unlink()
+        for file_path in test_import_logs_dir.glob("*"):
             if file_path.is_file():
                 file_path.unlink()
 

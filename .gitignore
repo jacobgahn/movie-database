@@ -27,3 +27,4 @@ dmypy.json
 data/
 uploads/
 exports/
+import_logs/

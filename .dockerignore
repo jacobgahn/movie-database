@@ -27,5 +27,6 @@ htmlcov/
 .mypy_cache
 .dmypy.json
 dmypy.json
+import_logs/
 
 

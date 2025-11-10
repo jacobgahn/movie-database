@@ -7,7 +7,7 @@ from app.database import get_session
 from app.models import Movie, JobStatusResponse, JobCreatedResponse
 from app.tasks import import_movies_task, export_movies_zip_task
 from app.celery_app import celery_app
-from app.services import save_uploaded_file, EXPORT_DIR, cleanup_expired_exports, is_export_expired
+from app.services import save_uploaded_file, EXPORT_DIR, IMPORT_LOGS_DIR, cleanup_expired_exports, is_export_expired
 from app.selectors import search_movies, get_job_status, get_job_type
 
 router = APIRouter()
@@ -152,4 +152,62 @@ async def download_job_result(job_id: str):
         file_path,
         media_type='application/gzip',
         filename=filename
+    )
+
+
+@router.get("/import-logs/{log_filename}")
+async def download_error_log(log_filename: str):
+    """
+    Download an import error log file by filename.
+    
+    Args:
+        log_filename: Name of the error log file (e.g., import_errors_20251110_200445_524751ed.log)
+    
+    Returns:
+        FileResponse with the error log file
+    """
+    # Security: Validate filename to prevent path traversal attacks
+    # Only allow alphanumeric, underscore, dash, and dot characters
+    # Must end with .log
+    if not log_filename.endswith('.log'):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid log filename. Must end with .log"
+        )
+    
+    # Check for path traversal attempts
+    if '..' in log_filename or '/' in log_filename or '\\' in log_filename:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid log filename. Path traversal not allowed"
+        )
+    
+    # Validate filename format (should match import_errors_*.log pattern)
+    if not log_filename.startswith('import_errors_'):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid log filename format"
+        )
+    
+    # Construct full file path
+    file_path = os.path.join(IMPORT_LOGS_DIR, log_filename)
+    
+    # Verify file exists
+    if not os.path.exists(file_path):
+        raise HTTPException(
+            status_code=404,
+            detail=f"Error log file '{log_filename}' not found"
+        )
+    
+    # Verify it's actually a file (not a directory)
+    if not os.path.isfile(file_path):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid log file path"
+        )
+    
+    return FileResponse(
+        file_path,
+        media_type='text/plain',
+        filename=log_filename
     )

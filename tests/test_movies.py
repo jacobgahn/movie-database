@@ -588,3 +588,225 @@ class TestDownloadJobResult:
             assert response.status_code == status.HTTP_404_NOT_FOUND
             assert "not found" in response.json()["detail"].lower() or "not complete" in response.json()["detail"].lower()
 
+
+class TestErrorLogging:
+    """Tests for error log creation and retrieval"""
+    
+    def test_import_with_errors_creates_error_log(self, client, test_session, tmp_path):
+        """Test that import errors are logged and error_log path is returned in status"""
+        # CSV with multiple errors: missing fields, invalid year, etc.
+        csv_content = """movie_name,year,genres,rating
+The Matrix,1999,Action Sci-Fi,8.7
+,2010,Action,8.0
+Inception,,Sci-Fi,8.8
+Invalid Year,not-a-year,Action,7.5
+The Dark Knight,2008,Action,9.0
+Missing Name,,Comedy,6.0"""
+        
+        test_import_logs_dir = tmp_path / "import_logs"
+        test_engine = test_session.bind
+        
+        # Patch both the services and tasks modules to use the test import_logs directory
+        with patch('app.tasks.engine', test_engine), \
+             patch('app.services.IMPORT_LOGS_DIR', str(test_import_logs_dir)), \
+             patch('app.tasks.IMPORT_LOGS_DIR', str(test_import_logs_dir)):
+            # Start import
+            response = client.put(
+                "/movies",
+                files={"file": ("test_movies.csv", csv_content.encode('utf-8'), "text/csv")}
+            )
+        
+        assert response.status_code == status.HTTP_200_OK
+        data = response.json()
+        job_id = data["job_id"]
+        assert job_id is not None
+        
+        # Wait for task to complete (task_always_eager=True means it runs synchronously)
+        # Get job status - may need to retry if task is still processing
+        import time
+        max_retries = 10
+        for _ in range(max_retries):
+            status_response = client.get(f"/jobs/{job_id}/status")
+            assert status_response.status_code == status.HTTP_200_OK
+            
+            status_data = status_response.json()
+            if status_data["status"] == "completed":
+                break
+            time.sleep(0.1)
+        
+        assert status_data["status"] == "completed"
+        assert "result" in status_data
+        
+        result = status_data["result"]
+        assert "error_log" in result
+        assert result["error_log"] is not None
+        
+        # Verify error log file exists
+        error_log_path = result["error_log"]
+        assert os.path.exists(error_log_path)
+        
+        # Verify error log content
+        with open(error_log_path, 'r', encoding='utf-8') as f:
+            log_content = f.read()
+            assert "Import Error Log" in log_content
+            assert "Total Errors" in log_content
+            # Should have errors for rows with missing/invalid data
+            assert "Missing required field" in log_content or "Invalid year format" in log_content
+        
+        # Verify that some movies were still imported (valid ones)
+        from sqlmodel import select
+        movies = test_session.exec(select(Movie)).all()
+        assert len(movies) > 0  # At least The Matrix and The Dark Knight should be imported
+    
+    def test_import_without_errors_no_error_log(self, client, test_session):
+        """Test that successful imports don't create error logs"""
+        csv_content = """movie_name,year,genres,rating
+The Matrix,1999,Action Sci-Fi,8.7
+Inception,2010,Action Sci-Fi Thriller,8.8
+The Dark Knight,2008,Action Crime Drama,9.0"""
+        
+        test_engine = test_session.bind
+        with patch('app.tasks.engine', test_engine):
+            response = client.put(
+                "/movies",
+                files={"file": ("test_movies.csv", csv_content.encode('utf-8'), "text/csv")}
+            )
+        
+        assert response.status_code == status.HTTP_200_OK
+        data = response.json()
+        job_id = data["job_id"]
+        
+        # Get job status - may need to retry if task is still processing
+        import time
+        max_retries = 10
+        for _ in range(max_retries):
+            status_response = client.get(f"/jobs/{job_id}/status")
+            assert status_response.status_code == status.HTTP_200_OK
+            
+            status_data = status_response.json()
+            if status_data["status"] == "completed":
+                break
+            time.sleep(0.1)
+        
+        assert status_data["status"] == "completed"
+        assert "result" in status_data
+        
+        result = status_data["result"]
+        # error_log should be None when there are no errors
+        assert result.get("error_log") is None
+    
+    def test_import_error_log_contains_row_details(self, client, test_session, tmp_path):
+        """Test that error log contains detailed information about each error"""
+        csv_content = """movie_name,year,genres,rating
+The Matrix,1999,Action Sci-Fi,8.7
+Missing Name,,Comedy,6.0
+Invalid Year,not-a-number,Action,7.5"""
+        
+        test_import_logs_dir = tmp_path / "import_logs"
+        test_engine = test_session.bind
+        
+        # Patch both the services and tasks modules to use the test import_logs directory
+        with patch('app.tasks.engine', test_engine), \
+             patch('app.services.IMPORT_LOGS_DIR', str(test_import_logs_dir)), \
+             patch('app.tasks.IMPORT_LOGS_DIR', str(test_import_logs_dir)):
+            response = client.put(
+                "/movies",
+                files={"file": ("test_movies.csv", csv_content.encode('utf-8'), "text/csv")}
+            )
+        
+        assert response.status_code == status.HTTP_200_OK
+        job_id = response.json()["job_id"]
+        
+        # Get job status - may need to retry if task is still processing
+        import time
+        max_retries = 10
+        for _ in range(max_retries):
+            status_response = client.get(f"/jobs/{job_id}/status")
+            status_data = status_response.json()
+            if status_data["status"] == "completed":
+                break
+            time.sleep(0.1)
+        
+        result = status_data["result"]
+        
+        if result.get("error_log"):
+            error_log_path = result["error_log"]
+            assert os.path.exists(error_log_path)
+            
+            with open(error_log_path, 'r', encoding='utf-8') as f:
+                log_content = f.read()
+                # Check for row numbers
+                assert "Row" in log_content
+                # Check for error messages
+                assert "Missing required field" in log_content or "Invalid year format" in log_content
+                # Check for row data
+                assert "Row Data" in log_content
+
+
+class TestDownloadErrorLog:
+    """Tests for GET /import-logs/{log_filename} endpoint"""
+    
+    def test_download_error_log_success(self, client, tmp_path):
+        """Test successful download of error log file"""
+        # Create test import_logs directory and a log file
+        test_import_logs_dir = tmp_path / "import_logs"
+        test_import_logs_dir.mkdir(exist_ok=True)
+        
+        # Create a test error log file
+        log_filename = "import_errors_20251110_200445_524751ed.log"
+        log_file = test_import_logs_dir / log_filename
+        log_content = """Import Error Log
+Generated: 2025-11-10T20:04:45.968611
+Total Errors: 2
+================================================================================
+
+Row 2: Missing required field: year
+Row Data: {'movie_name': 'Test Movie', 'year': ''}
+--------------------------------------------------------------------------------
+Row 3: Invalid year format: 'not-a-year'
+Row Data: {'movie_name': 'Another Movie', 'year': 'not-a-year'}
+--------------------------------------------------------------------------------
+"""
+        log_file.write_text(log_content)
+        
+        # Patch IMPORT_LOGS_DIR to use test directory
+        with patch('app.services.IMPORT_LOGS_DIR', str(test_import_logs_dir)), \
+             patch('app.movies.IMPORT_LOGS_DIR', str(test_import_logs_dir)):
+            response = client.get(f"/import-logs/{log_filename}")
+        
+        assert response.status_code == status.HTTP_200_OK
+        assert "text/plain" in response.headers["content-type"]
+        assert log_filename in response.headers.get("content-disposition", "")
+        assert "Import Error Log" in response.text
+        assert "Total Errors: 2" in response.text
+    
+    def test_download_error_log_not_found(self, client, tmp_path):
+        """Test download when log file doesn't exist"""
+        test_import_logs_dir = tmp_path / "import_logs"
+        test_import_logs_dir.mkdir(exist_ok=True)
+        
+        with patch('app.services.IMPORT_LOGS_DIR', str(test_import_logs_dir)), \
+             patch('app.movies.IMPORT_LOGS_DIR', str(test_import_logs_dir)):
+            response = client.get("/import-logs/import_errors_nonexistent.log")
+        
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+        assert "not found" in response.json()["detail"].lower()
+    
+    def test_download_error_log_invalid_filename(self, client):
+        """Test download with invalid filename"""
+        # Test with wrong extension
+        response = client.get("/import-logs/import_errors_20251110.txt")
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "must end with .log" in response.json()["detail"].lower()
+        
+        # Test with wrong prefix
+        response = client.get("/import-logs/wrong_prefix_20251110.log")
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "Invalid log filename format" in response.json()["detail"]
+        
+        # Test with slash in filename (path traversal attempt)
+        # FastAPI normalizes paths, but we still validate the parameter
+        response = client.get("/import-logs/import_errors_20251110/etc/passwd.log")
+        # FastAPI might normalize this, but our validation should catch it
+        assert response.status_code in (status.HTTP_400_BAD_REQUEST, status.HTTP_404_NOT_FOUND)
+

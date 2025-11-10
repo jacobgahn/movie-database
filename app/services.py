@@ -5,6 +5,10 @@ import os
 import csv
 import io
 import shutil
+import logging
+import time
+from datetime import datetime
+from uuid import uuid4
 from fastapi import UploadFile, HTTPException
 from sqlmodel import Session, delete
 from app.models import Movie
@@ -13,10 +17,45 @@ from app.models import Movie
 # Directory for storing uploaded files
 UPLOAD_DIR = "./uploads"
 EXPORT_DIR = "./exports"
+IMPORT_LOGS_DIR = "./import_logs"
+
+# Export artifact TTL (Time To Live) in hours
+# Can be overridden via environment variable EXPORT_TTL_HOURS
+EXPORT_TTL_HOURS = int(os.getenv("EXPORT_TTL_HOURS", "24"))
+EXPORT_TTL_SECONDS = EXPORT_TTL_HOURS * 3600
+
+# Configure logging
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 
 # Maximum file size: 2GB (adjust as needed)
 MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024  # 2GB in bytes
 CHUNK_SIZE = 8192  # 8KB chunks for efficient streaming
+
+
+def _write_error_log(errors: list[dict], log_file_path: str):
+    """
+    Write import errors to a log file.
+    
+    Args:
+        errors: List of error dicts with keys: row_num, error, row_data
+        log_file_path: Path to the error log file
+        
+    Raises:
+        Exception: If the error log cannot be written
+    """
+    os.makedirs(IMPORT_LOGS_DIR, exist_ok=True)
+    with open(log_file_path, 'w', encoding='utf-8') as f:
+        f.write(f"Import Error Log\n")
+        f.write(f"Generated: {datetime.now().isoformat()}\n")
+        f.write(f"Total Errors: {len(errors)}\n")
+        f.write("=" * 80 + "\n\n")
+        
+        for error in errors:
+            f.write(f"Row {error['row_num']}: {error['error']}\n")
+            f.write(f"Row Data: {error.get('row_data', 'N/A')}\n")
+            f.write("-" * 80 + "\n")
+
 
 def cleanup_expired_exports(export_dir: str = EXPORT_DIR) -> int:
     """
@@ -239,6 +278,8 @@ async def import_movies_from_upload_file(file: UploadFile, session: Session) -> 
     buffer = b""
     header = None
     has_content = False
+    errors = []  # Track errors for logging
+    log_file_path = None  # Will be set if errors occur
 
     try:
         # Clear existing data (overwrite previous state) - part of transaction
@@ -302,6 +343,13 @@ async def import_movies_from_upload_file(file: UploadFile, session: Session) -> 
                 # Create dict from row values
                 if len(row_values) != len(header):
                     error_count += 1
+                    error_msg = f"Column count mismatch: expected {len(header)}, got {len(row_values)}"
+                    errors.append({
+                        "row_num": total_rows + 1,
+                        "error": error_msg,
+                        "row_data": str(row_values)
+                    })
+                    logger.warning(f"Row {total_rows + 1}: {error_msg}")
                     continue
                 
                 row = dict(zip(header, row_values))
@@ -312,17 +360,38 @@ async def import_movies_from_upload_file(file: UploadFile, session: Session) -> 
                     movie_name = row.get('movie_name', '').strip()
                     if not movie_name:
                         error_count += 1
+                        error_msg = "Missing required field: movie_name"
+                        errors.append({
+                            "row_num": total_rows,
+                            "error": error_msg,
+                            "row_data": str(row)
+                        })
+                        logger.warning(f"Row {total_rows}: {error_msg}")
                         continue
                     
                     year_str = row.get('year', '').strip()
                     if not year_str:
                         error_count += 1
+                        error_msg = "Missing required field: year"
+                        errors.append({
+                            "row_num": total_rows,
+                            "error": error_msg,
+                            "row_data": str(row)
+                        })
+                        logger.warning(f"Row {total_rows}: {error_msg}")
                         continue
                     
                     try:
                         year = int(year_str)
                     except ValueError:
                         error_count += 1
+                        error_msg = f"Invalid year format: '{year_str}'"
+                        errors.append({
+                            "row_num": total_rows,
+                            "error": error_msg,
+                            "row_data": str(row)
+                        })
+                        logger.warning(f"Row {total_rows}: {error_msg}")
                         continue
                     
                     genres = row.get('genres', '').strip()
@@ -351,6 +420,13 @@ async def import_movies_from_upload_file(file: UploadFile, session: Session) -> 
                 
                 except Exception as e:
                     error_count += 1
+                    error_msg = f"Unexpected error: {str(e)}"
+                    errors.append({
+                        "row_num": total_rows,
+                        "error": error_msg,
+                        "row_data": str(row)
+                    })
+                    logger.error(f"Row {total_rows}: {error_msg}", exc_info=True)
                     continue
         
         # Process any remaining data in buffer (last line without newline)
@@ -392,12 +468,40 @@ async def import_movies_from_upload_file(file: UploadFile, session: Session) -> 
                                         batch.append(movie)
                                     except ValueError:
                                         error_count += 1
+                                        error_msg = f"Invalid year format in last line"
+                                        errors.append({
+                                            "row_num": total_rows,
+                                            "error": error_msg,
+                                            "row_data": str(row)
+                                        })
+                                        logger.warning(f"Row {total_rows}: {error_msg}")
                                 else:
                                     error_count += 1
+                                    error_msg = "Missing required field: year (last line)"
+                                    errors.append({
+                                        "row_num": total_rows,
+                                        "error": error_msg,
+                                        "row_data": str(row)
+                                    })
+                                    logger.warning(f"Row {total_rows}: {error_msg}")
                             else:
                                 error_count += 1
-                        except Exception:
+                                error_msg = "Missing required field: movie_name (last line)"
+                                errors.append({
+                                    "row_num": total_rows,
+                                    "error": error_msg,
+                                    "row_data": str(row)
+                                })
+                                logger.warning(f"Row {total_rows}: {error_msg}")
+                        except Exception as e:
                             error_count += 1
+                            error_msg = f"Unexpected error in last line: {str(e)}"
+                            errors.append({
+                                "row_num": total_rows,
+                                "error": error_msg,
+                                "row_data": str(row) if 'row' in locals() else "N/A"
+                            })
+                            logger.error(f"Row {total_rows}: {error_msg}", exc_info=True)
             except UnicodeDecodeError:
                 raise HTTPException(status_code=400, detail="File must be valid UTF-8 encoded text")
             except Exception:
@@ -420,11 +524,28 @@ async def import_movies_from_upload_file(file: UploadFile, session: Session) -> 
         # Commit transaction
         session.commit()
         
+        # Write error log if there were errors
+        log_file_path = None
+        if errors:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            unique_id = uuid4().hex[:8]
+            log_filename = f"import_errors_{timestamp}_{unique_id}.log"
+            log_file_path = os.path.join(IMPORT_LOGS_DIR, log_filename)
+            try:
+                _write_error_log(errors, log_file_path)
+                logger.info(f"Error log written to: {log_file_path}")
+            except Exception as e:
+                logger.error(f"Failed to write error log: {str(e)}", exc_info=True)
+                # Still include the path in the result so user knows we tried to create it
+                # The file may not exist, but at least they know where it should be
+                log_file_path = log_file_path
+        
         return {
             "status": "completed",
             "imported": imported_count,
             "errors": error_count,
-            "total_rows": total_rows
+            "total_rows": total_rows,
+            "error_log": log_file_path
         }
         
     except HTTPException:
@@ -480,6 +601,8 @@ def import_movies_from_csv(file_path: str, session: Session) -> dict:
     batch = []
     imported_count = 0
     error_count = 0
+    errors = []  # Track errors for logging
+    log_file_path = None  # Will be set if errors occur
     
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
@@ -491,17 +614,38 @@ def import_movies_from_csv(file_path: str, session: Session) -> dict:
                     movie_name = row.get('movie_name', '').strip()
                     if not movie_name:
                         error_count += 1
+                        error_msg = "Missing required field: movie_name"
+                        errors.append({
+                            "row_num": row_num,
+                            "error": error_msg,
+                            "row_data": str(row)
+                        })
+                        logger.warning(f"Row {row_num}: {error_msg}")
                         continue
                     
                     year_str = row.get('year', '').strip()
                     if not year_str:
                         error_count += 1
+                        error_msg = "Missing required field: year"
+                        errors.append({
+                            "row_num": row_num,
+                            "error": error_msg,
+                            "row_data": str(row)
+                        })
+                        logger.warning(f"Row {row_num}: {error_msg}")
                         continue
                     
                     try:
                         year = int(year_str)
                     except ValueError:
                         error_count += 1
+                        error_msg = f"Invalid year format: '{year_str}'"
+                        errors.append({
+                            "row_num": row_num,
+                            "error": error_msg,
+                            "row_data": str(row)
+                        })
+                        logger.warning(f"Row {row_num}: {error_msg}")
                         continue
                     
                     genres = row.get('genres', '').strip()
@@ -531,6 +675,13 @@ def import_movies_from_csv(file_path: str, session: Session) -> dict:
                 
                 except Exception as e:
                     error_count += 1
+                    error_msg = f"Unexpected error: {str(e)}"
+                    errors.append({
+                        "row_num": row_num,
+                        "error": error_msg,
+                        "row_data": str(row)
+                    })
+                    logger.error(f"Row {row_num}: {error_msg}", exc_info=True)
                     continue
             
             # Insert remaining batch
@@ -539,11 +690,28 @@ def import_movies_from_csv(file_path: str, session: Session) -> dict:
                 session.commit()
                 imported_count += len(batch)
         
+        # Write error log if there were errors
+        log_file_path = None
+        if errors:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            unique_id = uuid4().hex[:8]
+            log_filename = f"import_errors_{timestamp}_{unique_id}.log"
+            log_file_path = os.path.join(IMPORT_LOGS_DIR, log_filename)
+            try:
+                _write_error_log(errors, log_file_path)
+                logger.info(f"Error log written to: {log_file_path}")
+            except Exception as e:
+                logger.error(f"Failed to write error log: {str(e)}", exc_info=True)
+                # Still include the path in the result so user knows we tried to create it
+                # The file may not exist, but at least they know where it should be
+                log_file_path = log_file_path
+        
         return {
             "status": "completed",
             "imported": imported_count,
             "errors": error_count,
-            "total_rows": total_rows
+            "total_rows": total_rows,
+            "error_log": log_file_path
         }
         
     except HTTPException:
