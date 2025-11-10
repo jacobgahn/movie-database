@@ -129,26 +129,83 @@ For more Docker details, see [DOCKER.md](DOCKER.md).
 - Graceful error handling with appropriate HTTP status codes
 - Detailed error messages for debugging
 - Database error handling with proper exception catching
-
-## Project Structure
-
 ```
-.
-├── app/
-│   ├── __init__.py
-│   ├── celery_app.py      # Celery configuration
-│   ├── database.py         # Database setup and session management
-│   ├── models.py           # SQLModel database models
-│   ├── movies.py           # API endpoints
-│   └── tasks.py            # Celery background tasks
-├── main.py                 # FastAPI application entry point
-├── pyproject.toml          # Project dependencies
-├── Dockerfile              # Docker image definition
-├── docker-compose.yml      # Docker Compose configuration
-├── DOCKER.md               # Docker usage documentation
-├── README.md              # This file
-└── FUTURE_CONSIDERATIONS.md  # Potential improvements
+
+## Testing
+
+The project includes comprehensive integration tests for all API endpoints. Tests use a lightweight SQLite database setup with proper isolation between test cases.
+
+### Running Tests
+
+First, install the test dependencies:
+
+```bash
+# Using uv (recommended - uses uv.lock for reproducible installs)
+uv sync --extra test
+
+# Or using uv's pip-compatible interface
+uv pip install -e ".[test]"
+
+# Or using traditional pip
+pip install -e ".[test]"
 ```
+
+Then run the tests:
+
+```bash
+# Run all tests
+pytest
+
+# Run with verbose output
+pytest -v
+
+# Run a specific test file
+pytest tests/test_movies.py
+
+# Run a specific test class
+pytest tests/test_movies.py::TestQueryMovies
+
+# Run a specific test
+pytest tests/test_movies.py::TestQueryMovies::test_query_movies_by_year_range
+
+# Run with coverage (if pytest-cov is installed)
+pytest --cov=app --cov-report=html
+```
+
+### Test Structure
+
+The test suite is organized as follows:
+
+- **`tests/conftest.py`**: Contains pytest fixtures for:
+  - `test_db`: Creates a temporary SQLite database for each test
+  - `test_session`: Database session for direct database operations
+  - `client`: FastAPI TestClient with database dependency override
+  - `mock_celery_task`: Mocks Celery tasks (no Redis/Celery worker needed)
+  - `sample_movies`: Pre-populated movie data for query tests
+  - `sample_csv_content` & `sample_csv_file`: Test CSV data
+
+- **`tests/test_movies.py`**: Integration tests covering:
+  - **PUT /movies**: File upload validation and success cases
+  - **GET /movies**: Query by year range and genre with various filters
+  - **GET /movies/zip**: Export request handling
+  - **GET /jobs/{job_id}/status**: Job status polling (pending, in-progress, completed, failed)
+  - **GET /jobs/{job_id}/download**: Download export files
+
+### Test Features
+
+- **Lightweight Setup**: Each test gets its own temporary SQLite database file
+- **Proper Isolation**: Tests don't interfere with each other
+- **No External Dependencies**: Celery tasks are mocked, so no Redis/Celery worker is required
+- **Temporary Directories**: Upload/export directories are created per test and cleaned up automatically
+- **Comprehensive Coverage**: All endpoints and edge cases are tested
+
+### Test Database
+
+Tests use temporary SQLite databases created for each test function. The database is automatically cleaned up after each test, ensuring:
+- No test data pollution
+- Fast test execution
+- Parallel test execution support
+- No need to manage test database state
 
 ## Example Usage
 

@@ -12,3 +12,16 @@ dependencies = [
     "redis>=5.0.0",
     "python-multipart>=0.0.6",
 ]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=7.4.0",
+    "httpx>=0.24.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"

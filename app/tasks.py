@@ -29,7 +29,7 @@ def import_movies_task(self, file_path: str):
         # Update state: starting
         self.update_state(
             state="PROGRESS",
-            meta={"current": 0, "total": 0, "status": "Starting import..."}
+            meta={"current": 0, "total": 0, "status": "Starting import...", "job_type": "import"}
         )
         
         # First pass: count total rows for progress tracking
@@ -49,7 +49,7 @@ def import_movies_task(self, file_path: str):
         
         self.update_state(
             state="PROGRESS",
-            meta={"current": 0, "total": total_rows, "status": "Cleared existing data. Importing movies..."}
+            meta={"current": 0, "total": total_rows, "status": "Cleared existing data. Importing movies...", "job_type": "import"}
         )
         
         # Second pass: import data in batches
@@ -114,7 +114,8 @@ def import_movies_task(self, file_path: str):
                                 "current": row_num,
                                 "total": total_rows,
                                 "status": f"Imported {imported_count} movies...",
-                                "progress": progress
+                                "progress": progress,
+                                "job_type": "import"
                             }
                         )
                 
@@ -163,7 +164,7 @@ def export_movies_zip_task(self, output_dir: str = "./exports"):
         # Update state: starting
         self.update_state(
             state="PROGRESS",
-            meta={"current": 0, "total": 0, "status": "Starting export..."}
+            meta={"current": 0, "total": 0, "status": "Starting export...", "job_type": "export"}
         )
         
         # Count total movies for progress tracking
@@ -181,7 +182,7 @@ def export_movies_zip_task(self, output_dir: str = "./exports"):
         
         self.update_state(
             state="PROGRESS",
-            meta={"current": 0, "total": total_movies, "status": f"Exporting {total_movies} movies..."}
+            meta={"current": 0, "total": total_movies, "status": f"Exporting {total_movies} movies...", "job_type": "export"}
         )
         
         # Write CSV and compress in one pass
@@ -216,7 +217,8 @@ def export_movies_zip_task(self, output_dir: str = "./exports"):
                                 "current": exported_count,
                                 "total": total_movies,
                                 "status": f"Exported {exported_count}/{total_movies} movies...",
-                                "progress": progress
+                                "progress": progress,
+                                "job_type": "export"
                             }
                         )
         

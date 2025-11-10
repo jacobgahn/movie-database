@@ -1,5 +1,6 @@
 from sqlmodel import SQLModel, Field, Index
-from typing import Optional
+from typing import Optional, Literal, Any
+from pydantic import BaseModel
 
 
 class Movie(SQLModel, table=True):
@@ -16,4 +17,23 @@ class Movie(SQLModel, table=True):
     year: int = Field(index=True)
     genres: str = Field(index=True)  # Stored as comma-separated string
     rating: Optional[float] = Field(default=None)
+
+
+class JobCreatedResponse(BaseModel):
+    """Pydantic model for job creation response"""
+    job_id: str
+    status: str
+
+
+class JobStatusResponse(BaseModel):
+    """Pydantic model for job status response"""
+    job_id: str
+    type: Literal["export", "import"]
+    status: str
+    progress: int
+    message: Optional[str] = None
+    current: Optional[int] = None
+    total: Optional[int] = None
+    result: Optional[Any] = None
+    error: Optional[str] = None
 
