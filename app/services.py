@@ -32,6 +32,44 @@ logging.basicConfig(level=logging.INFO)
 MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024  # 2GB in bytes
 CHUNK_SIZE = 8192  # 8KB chunks for efficient streaming
 
+# Movie name validation constants
+MAX_MOVIE_NAME_LENGTH = 500  # Maximum length for movie names
+
+
+def validate_movie_name(movie_name: str) -> tuple[bool, str | None]:
+    """
+    Validate a movie name for import.
+    
+    Args:
+        movie_name: The movie name to validate (should already be stripped)
+        
+    Returns:
+        tuple: (is_valid, error_message)
+        - is_valid: True if the name is valid, False otherwise
+        - error_message: None if valid, error description if invalid
+    """
+    if not movie_name:
+        return False, "Movie name cannot be empty"
+    
+    # Check length
+    if len(movie_name) > MAX_MOVIE_NAME_LENGTH:
+        return False, f"Movie name exceeds maximum length of {MAX_MOVIE_NAME_LENGTH} characters"
+    
+    # Check for control characters (non-printable except common whitespace)
+    # Allow: space, tab, newline, carriage return (though CSV parsing should handle these)
+    # Reject: null bytes, other control characters
+    for char in movie_name:
+        code = ord(char)
+        # Reject null bytes and other control characters (except common whitespace)
+        if code == 0 or (code < 32 and char not in ' \t\n\r'):
+            return False, f"Movie name contains invalid control character (code {code})"
+    
+    # Check for excessive whitespace (more than 2 consecutive spaces)
+    if '   ' in movie_name:
+        return False, "Movie name contains excessive whitespace"
+    
+    return True, None
+
 
 def _write_error_log(errors: list[dict], log_file_path: str):
     """
@@ -358,9 +396,10 @@ async def import_movies_from_upload_file(file: UploadFile, session: Session) -> 
                 try:
                     # Validate and parse row
                     movie_name = row.get('movie_name', '').strip()
-                    if not movie_name:
+                    is_valid, validation_error = validate_movie_name(movie_name)
+                    if not is_valid:
                         error_count += 1
-                        error_msg = "Missing required field: movie_name"
+                        error_msg = validation_error or "Missing required field: movie_name"
                         errors.append({
                             "row_num": total_rows,
                             "error": error_msg,
@@ -444,7 +483,8 @@ async def import_movies_from_upload_file(file: UploadFile, session: Session) -> 
                         
                         try:
                             movie_name = row.get('movie_name', '').strip()
-                            if movie_name:
+                            is_valid, validation_error = validate_movie_name(movie_name)
+                            if is_valid:
                                 year_str = row.get('year', '').strip()
                                 if year_str:
                                     try:
@@ -486,7 +526,7 @@ async def import_movies_from_upload_file(file: UploadFile, session: Session) -> 
                                     logger.warning(f"Row {total_rows}: {error_msg}")
                             else:
                                 error_count += 1
-                                error_msg = "Missing required field: movie_name (last line)"
+                                error_msg = validation_error or "Missing required field: movie_name (last line)"
                                 errors.append({
                                     "row_num": total_rows,
                                     "error": error_msg,
@@ -612,9 +652,10 @@ def import_movies_from_csv(file_path: str, session: Session) -> dict:
                 try:
                     # Validate and parse row
                     movie_name = row.get('movie_name', '').strip()
-                    if not movie_name:
+                    is_valid, validation_error = validate_movie_name(movie_name)
+                    if not is_valid:
                         error_count += 1
-                        error_msg = "Missing required field: movie_name"
+                        error_msg = validation_error or "Missing required field: movie_name"
                         errors.append({
                             "row_num": row_num,
                             "error": error_msg,

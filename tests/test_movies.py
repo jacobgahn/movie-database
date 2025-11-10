@@ -171,6 +171,52 @@ The Dark Knight,2008,Action,9.0"""
         assert "The Matrix" in movie_names
         assert "The Dark Knight" in movie_names
     
+    def test_import_movies_with_invalid_movie_name(self, client, test_session):
+        """Test import with invalid movie names (control characters, excessive length, etc.)"""
+        csv_content = """movie_name,year,genres,rating
+The Matrix,1999,Action Sci-Fi,8.7
+Valid Movie,2000,Action,8.0
+""" + "A" * 501 + """,2001,Action,7.0
+Movie with\x00null,2002,Action,6.0
+Movie   with   spaces,2003,Action,5.0"""
+        
+        test_engine = test_session.bind
+        with patch('app.tasks.engine', test_engine):
+            response = client.put(
+                "/movies",
+                files={"file": ("test_movies.csv", csv_content.encode('utf-8'), "text/csv")}
+            )
+        
+        assert response.status_code == status.HTTP_200_OK
+        job_id = response.json()["job_id"]
+        
+        # Wait for task to complete
+        import time
+        max_retries = 10
+        for _ in range(max_retries):
+            status_response = client.get(f"/jobs/{job_id}/status")
+            status_data = status_response.json()
+            if status_data["status"] == "completed":
+                break
+            time.sleep(0.1)
+        
+        assert status_data["status"] == "completed"
+        result = status_data["result"]
+        
+        # Should have errors for invalid movie names
+        assert result["errors"] > 0
+        # Valid movies should still be imported
+        assert result["imported"] > 0
+        
+        # Verify only valid movies were imported
+        from sqlmodel import select
+        movies = test_session.exec(select(Movie)).all()
+        movie_names = [m.movie_name for m in movies]
+        assert "The Matrix" in movie_names
+        assert "Valid Movie" in movie_names
+        # Invalid ones should not be imported
+        assert "Movie   with   spaces" not in movie_names
+    
     def test_import_movies_with_optional_rating(self, client, test_session):
         """Test import with optional rating field (can be empty or invalid)"""
         csv_content = """movie_name,year,genres,rating

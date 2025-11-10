@@ -13,7 +13,7 @@ from sqlmodel import Session, select, delete
 from app.celery_app import celery_app
 from app.database import engine
 from app.models import Movie
-from app.services import IMPORT_LOGS_DIR, _write_error_log, cleanup_expired_exports
+from app.services import IMPORT_LOGS_DIR, _write_error_log, cleanup_expired_exports, validate_movie_name
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -74,9 +74,10 @@ def import_movies_task(self, file_path: str):
                 try:
                     # Validate and parse row
                     movie_name = row.get('movie_name', '').strip()
-                    if not movie_name:
+                    is_valid, validation_error = validate_movie_name(movie_name)
+                    if not is_valid:
                         error_count += 1
-                        error_msg = "Missing required field: movie_name"
+                        error_msg = validation_error or "Missing required field: movie_name"
                         errors.append({
                             "row_num": row_num,
                             "error": error_msg,
