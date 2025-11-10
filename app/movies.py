@@ -7,7 +7,7 @@ from app.database import get_session
 from app.models import Movie, JobStatusResponse, JobCreatedResponse
 from app.tasks import import_movies_task, export_movies_zip_task
 from app.celery_app import celery_app
-from app.services import save_uploaded_file, EXPORT_DIR
+from app.services import save_uploaded_file, EXPORT_DIR, cleanup_expired_exports, is_export_expired
 from app.selectors import search_movies, get_job_status, get_job_type
 
 router = APIRouter()
@@ -84,6 +84,9 @@ async def export_movies() -> JobCreatedResponse:
     # Create export directory if it doesn't exist
     os.makedirs(EXPORT_DIR, exist_ok=True)
     
+    # Clean up expired export files before creating new one
+    cleanup_expired_exports(EXPORT_DIR)
+    
     # Start Celery task
     task = export_movies_zip_task.delay(EXPORT_DIR)
     
@@ -130,6 +133,18 @@ async def download_job_result(job_id: str):
     file_path = result.get('file_path')
     if not file_path or not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="Export file not found")
+    
+    # Check if export file has expired
+    if is_export_expired(file_path):
+        # Delete the expired file
+        try:
+            os.remove(file_path)
+        except OSError:
+            pass
+        raise HTTPException(
+            status_code=410,
+            detail="Export file has expired and has been deleted. Please request a new export."
+        )
     
     filename = result.get('filename', 'movies_export.csv.gz')
     

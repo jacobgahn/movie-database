@@ -18,6 +18,74 @@ EXPORT_DIR = "./exports"
 MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024  # 2GB in bytes
 CHUNK_SIZE = 8192  # 8KB chunks for efficient streaming
 
+def cleanup_expired_exports(export_dir: str = EXPORT_DIR) -> int:
+    """
+    Delete export files that have exceeded their TTL.
+    
+    Args:
+        export_dir: Directory containing export files
+        
+    Returns:
+        int: Number of files deleted
+    """
+    if not os.path.exists(export_dir):
+        return 0
+    
+    deleted_count = 0
+    current_time = time.time()
+    
+    try:
+        for filename in os.listdir(export_dir):
+            # Only process export files (gzipped CSV files)
+            if not filename.endswith('.csv.gz') or not filename.startswith('movies_export_'):
+                continue
+            
+            file_path = os.path.join(export_dir, filename)
+            
+            # Skip if not a file
+            if not os.path.isfile(file_path):
+                continue
+            
+            # Check file age
+            file_mtime = os.path.getmtime(file_path)
+            file_age = current_time - file_mtime
+            
+            if file_age > EXPORT_TTL_SECONDS:
+                try:
+                    os.remove(file_path)
+                    deleted_count += 1
+                    logger.info(f"Deleted expired export file: {filename} (age: {file_age / 3600:.2f} hours)")
+                except OSError as e:
+                    logger.error(f"Failed to delete expired export file {filename}: {str(e)}")
+    
+    except OSError as e:
+        logger.error(f"Error cleaning up export directory: {str(e)}")
+    
+    if deleted_count > 0:
+        logger.info(f"Cleaned up {deleted_count} expired export file(s)")
+    
+    return deleted_count
+
+
+def is_export_expired(file_path: str) -> bool:
+    """
+    Check if an export file has exceeded its TTL.
+    
+    Args:
+        file_path: Path to the export file
+        
+    Returns:
+        bool: True if file is expired, False otherwise
+    """
+    if not os.path.exists(file_path):
+        return True
+    
+    current_time = time.time()
+    file_mtime = os.path.getmtime(file_path)
+    file_age = current_time - file_mtime
+    
+    return file_age > EXPORT_TTL_SECONDS
+
 
 async def save_uploaded_file(file: UploadFile, filename: str) -> str:
     """
