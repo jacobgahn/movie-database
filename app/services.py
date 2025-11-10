@@ -71,6 +71,62 @@ def validate_movie_name(movie_name: str) -> tuple[bool, str | None]:
     return True, None
 
 
+def parse_and_validate_movie_row(row: dict, row_num: int) -> tuple[Movie | None, str | None]:
+    """
+    Parse and validate a CSV row into a Movie object.
+    
+    This is the single source of truth for row parsing and validation logic.
+    All import functions should use this to ensure consistent behavior.
+    
+    Args:
+        row: Dictionary of CSV row values (from csv.DictReader)
+        row_num: Row number for error reporting
+        
+    Returns:
+        tuple: (movie, error_message)
+        - movie: Movie object if valid, None otherwise
+        - error_message: None if valid, error description if invalid
+    """
+    # Validate movie name
+    movie_name = row.get('movie_name', '').strip()
+    is_valid, validation_error = validate_movie_name(movie_name)
+    if not is_valid:
+        return None, validation_error or "Missing required field: movie_name"
+    
+    # Validate year
+    year_str = row.get('year', '').strip()
+    if not year_str:
+        return None, "Missing required field: year"
+    
+    try:
+        year = int(year_str)
+    except ValueError:
+        return None, f"Invalid year format: '{year_str}'"
+    
+    # Parse optional fields
+    genres = row.get('genres', '').strip()
+    rating_str = row.get('rating', '').strip()
+    
+    rating = None
+    if rating_str:
+        try:
+            rating = float(rating_str)
+        except ValueError:
+            pass  # Rating is optional, invalid values become None
+    
+    # Create Movie object
+    try:
+        movie = Movie(
+            movie_name=movie_name,
+            year=year,
+            genres=genres,
+            rating=rating
+        )
+        return movie, None
+    except Exception as e:
+        return None, f"Error creating movie object: {str(e)}"
+
+
 def _write_error_log(errors: list[dict], log_file_path: str):
     """
     Write import errors to a log file.
@@ -289,476 +345,4 @@ async def save_uploaded_file(file: UploadFile, filename: str) -> str:
         await file.close()
     
     return file_path
-
-
-async def import_movies_from_upload_file(file: UploadFile, session: Session) -> dict:
-    """
-    Import movies from uploaded CSV file into the database, overwriting existing data.
-    Reads file in chunks to handle large files efficiently.
-    
-    Args:
-        file: FastAPI UploadFile object
-        session: Database session
-        
-    Returns:
-        dict with status, imported count, error count, and total rows
-        
-    Raises:
-        HTTPException: If file is invalid or import fails
-    """
-    # Start transaction
-    batch_size = 1000
-    batch = []
-    imported_count = 0
-    error_count = 0
-    total_rows = 0
-    total_size = 0
-    buffer = b""
-    header = None
-    has_content = False
-    errors = []  # Track errors for logging
-    log_file_path = None  # Will be set if errors occur
-
-    try:
-        # Clear existing data (overwrite previous state) - part of transaction
-        session.exec(delete(Movie))
-        # Don't commit yet - wait until import is complete
-        
-        # Read file in chunks
-        while True:
-            chunk = await file.read(CHUNK_SIZE)
-            if not chunk:
-                break
-            
-            has_content = True
-            total_size += len(chunk)
-            
-            # Check file size limit
-            if total_size > MAX_FILE_SIZE:
-                raise HTTPException(
-                    status_code=413,
-                    detail=f"File size exceeds maximum allowed size of {MAX_FILE_SIZE / (1024*1024*1024):.1f}GB"
-                )
-            
-            buffer += chunk
-            
-            # Process complete lines from buffer
-            while True:
-                # Find the first newline
-                newline_pos = buffer.find(b'\n')
-                if newline_pos == -1:
-                    # No complete line yet, wait for more data
-                    break
-                
-                # Extract complete line (including newline)
-                line_bytes = buffer[:newline_pos + 1]
-                buffer = buffer[newline_pos + 1:]
-                
-                # Decode line
-                try:
-                    line = line_bytes.decode('utf-8').rstrip('\r\n')
-                except UnicodeDecodeError:
-                    raise HTTPException(status_code=400, detail="File must be valid UTF-8 encoded text")
-                
-                # Skip empty lines
-                if not line.strip():
-                    continue
-                
-                # Parse CSV line
-                csv_line = io.StringIO(line)
-                csv_reader = csv.reader(csv_line)
-                
-                try:
-                    row_values = next(csv_reader)
-                except StopIteration:
-                    continue
-                
-                # First line is header
-                if header is None:
-                    header = row_values
-                    continue
-                
-                # Create dict from row values
-                if len(row_values) != len(header):
-                    error_count += 1
-                    error_msg = f"Column count mismatch: expected {len(header)}, got {len(row_values)}"
-                    errors.append({
-                        "row_num": total_rows + 1,
-                        "error": error_msg,
-                        "row_data": str(row_values)
-                    })
-                    logger.warning(f"Row {total_rows + 1}: {error_msg}")
-                    continue
-                
-                row = dict(zip(header, row_values))
-                total_rows += 1
-                
-                try:
-                    # Validate and parse row
-                    movie_name = row.get('movie_name', '').strip()
-                    is_valid, validation_error = validate_movie_name(movie_name)
-                    if not is_valid:
-                        error_count += 1
-                        error_msg = validation_error or "Missing required field: movie_name"
-                        errors.append({
-                            "row_num": total_rows,
-                            "error": error_msg,
-                            "row_data": str(row)
-                        })
-                        logger.warning(f"Row {total_rows}: {error_msg}")
-                        continue
-                    
-                    year_str = row.get('year', '').strip()
-                    if not year_str:
-                        error_count += 1
-                        error_msg = "Missing required field: year"
-                        errors.append({
-                            "row_num": total_rows,
-                            "error": error_msg,
-                            "row_data": str(row)
-                        })
-                        logger.warning(f"Row {total_rows}: {error_msg}")
-                        continue
-                    
-                    try:
-                        year = int(year_str)
-                    except ValueError:
-                        error_count += 1
-                        error_msg = f"Invalid year format: '{year_str}'"
-                        errors.append({
-                            "row_num": total_rows,
-                            "error": error_msg,
-                            "row_data": str(row)
-                        })
-                        logger.warning(f"Row {total_rows}: {error_msg}")
-                        continue
-                    
-                    genres = row.get('genres', '').strip()
-                    rating_str = row.get('rating', '').strip()
-                    
-                    rating = None
-                    if rating_str:
-                        try:
-                            rating = float(rating_str)
-                        except ValueError:
-                            pass  # Rating is optional
-                    
-                    movie = Movie(
-                        movie_name=movie_name,
-                        year=year,
-                        genres=genres,
-                        rating=rating
-                    )
-                    batch.append(movie)
-                    
-                    # Batch insert (but don't commit yet - wait for transaction)
-                    if len(batch) >= batch_size:
-                        session.add_all(batch)
-                        imported_count += len(batch)
-                        batch = []
-                
-                except Exception as e:
-                    error_count += 1
-                    error_msg = f"Unexpected error: {str(e)}"
-                    errors.append({
-                        "row_num": total_rows,
-                        "error": error_msg,
-                        "row_data": str(row)
-                    })
-                    logger.error(f"Row {total_rows}: {error_msg}", exc_info=True)
-                    continue
-        
-        # Process any remaining data in buffer (last line without newline)
-        if buffer.strip():
-            try:
-                line = buffer.decode('utf-8').strip()
-                if line and header:
-                    csv_line = io.StringIO(line)
-                    csv_reader = csv.reader(csv_line)
-                    row_values = next(csv_reader, None)
-                    
-                    if row_values and len(row_values) == len(header):
-                        row = dict(zip(header, row_values))
-                        total_rows += 1
-                        
-                        try:
-                            movie_name = row.get('movie_name', '').strip()
-                            is_valid, validation_error = validate_movie_name(movie_name)
-                            if is_valid:
-                                year_str = row.get('year', '').strip()
-                                if year_str:
-                                    try:
-                                        year = int(year_str)
-                                        genres = row.get('genres', '').strip()
-                                        rating_str = row.get('rating', '').strip()
-                                        
-                                        rating = None
-                                        if rating_str:
-                                            try:
-                                                rating = float(rating_str)
-                                            except ValueError:
-                                                pass
-                                        
-                                        movie = Movie(
-                                            movie_name=movie_name,
-                                            year=year,
-                                            genres=genres,
-                                            rating=rating
-                                        )
-                                        batch.append(movie)
-                                    except ValueError:
-                                        error_count += 1
-                                        error_msg = f"Invalid year format in last line"
-                                        errors.append({
-                                            "row_num": total_rows,
-                                            "error": error_msg,
-                                            "row_data": str(row)
-                                        })
-                                        logger.warning(f"Row {total_rows}: {error_msg}")
-                                else:
-                                    error_count += 1
-                                    error_msg = "Missing required field: year (last line)"
-                                    errors.append({
-                                        "row_num": total_rows,
-                                        "error": error_msg,
-                                        "row_data": str(row)
-                                    })
-                                    logger.warning(f"Row {total_rows}: {error_msg}")
-                            else:
-                                error_count += 1
-                                error_msg = validation_error or "Missing required field: movie_name (last line)"
-                                errors.append({
-                                    "row_num": total_rows,
-                                    "error": error_msg,
-                                    "row_data": str(row)
-                                })
-                                logger.warning(f"Row {total_rows}: {error_msg}")
-                        except Exception as e:
-                            error_count += 1
-                            error_msg = f"Unexpected error in last line: {str(e)}"
-                            errors.append({
-                                "row_num": total_rows,
-                                "error": error_msg,
-                                "row_data": str(row) if 'row' in locals() else "N/A"
-                            })
-                            logger.error(f"Row {total_rows}: {error_msg}", exc_info=True)
-            except UnicodeDecodeError:
-                raise HTTPException(status_code=400, detail="File must be valid UTF-8 encoded text")
-            except Exception:
-                pass  # Ignore errors in last line processing
-        
-        if not has_content:
-            raise HTTPException(status_code=400, detail="Uploaded file is empty")
-        
-        if header is None:
-            raise HTTPException(status_code=400, detail="CSV file is empty or invalid")
-        
-        if total_rows == 0:
-            raise HTTPException(status_code=400, detail="CSV file contains no data rows")
-        
-        # Insert remaining batch
-        if batch:
-            session.add_all(batch)
-            imported_count += len(batch)
-        
-        # Commit transaction
-        session.commit()
-        
-        # Write error log if there were errors
-        log_file_path = None
-        if errors:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            unique_id = uuid4().hex[:8]
-            log_filename = f"import_errors_{timestamp}_{unique_id}.log"
-            log_file_path = os.path.join(IMPORT_LOGS_DIR, log_filename)
-            try:
-                _write_error_log(errors, log_file_path)
-                logger.info(f"Error log written to: {log_file_path}")
-            except Exception as e:
-                logger.error(f"Failed to write error log: {str(e)}", exc_info=True)
-                # Still include the path in the result so user knows we tried to create it
-                # The file may not exist, but at least they know where it should be
-                log_file_path = log_file_path
-        
-        return {
-            "status": "completed",
-            "imported": imported_count,
-            "errors": error_count,
-            "total_rows": total_rows,
-            "error_log": log_file_path
-        }
-        
-    except HTTPException:
-        session.rollback()
-        raise
-    except Exception as e:
-        session.rollback()
-        raise HTTPException(status_code=500, detail=f"Error importing movies: {str(e)}")
-    finally:
-        # Close the upload file to clean up temporary resources
-        await file.close()
-
-
-def import_movies_from_csv(file_path: str, session: Session) -> dict:
-    """
-    Import movies from CSV file into the database, overwriting existing data.
-    
-    Args:
-        file_path: Path to the CSV file to import
-        session: Database session
-        
-    Returns:
-        dict with status, imported count, error count, and total rows
-        
-    Raises:
-        HTTPException: If file is invalid or import fails
-    """
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="CSV file not found")
-    
-    # First pass: count total rows for validation
-    total_rows = 0
-    try:
-        with open(file_path, 'r', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            total_rows = sum(1 for _ in reader)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Error reading CSV file: {str(e)}")
-    
-    if total_rows == 0:
-        raise HTTPException(status_code=400, detail="CSV file is empty or invalid")
-    
-    # Clear existing data (overwrite previous state)
-    try:
-        session.exec(delete(Movie))
-        session.commit()
-    except Exception as e:
-        session.rollback()
-        raise HTTPException(status_code=500, detail=f"Error clearing existing data: {str(e)}")
-    
-    # Second pass: import data in batches
-    batch_size = 1000
-    batch = []
-    imported_count = 0
-    error_count = 0
-    errors = []  # Track errors for logging
-    log_file_path = None  # Will be set if errors occur
-    
-    try:
-        with open(file_path, 'r', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            
-            for row_num, row in enumerate(reader, start=1):
-                try:
-                    # Validate and parse row
-                    movie_name = row.get('movie_name', '').strip()
-                    is_valid, validation_error = validate_movie_name(movie_name)
-                    if not is_valid:
-                        error_count += 1
-                        error_msg = validation_error or "Missing required field: movie_name"
-                        errors.append({
-                            "row_num": row_num,
-                            "error": error_msg,
-                            "row_data": str(row)
-                        })
-                        logger.warning(f"Row {row_num}: {error_msg}")
-                        continue
-                    
-                    year_str = row.get('year', '').strip()
-                    if not year_str:
-                        error_count += 1
-                        error_msg = "Missing required field: year"
-                        errors.append({
-                            "row_num": row_num,
-                            "error": error_msg,
-                            "row_data": str(row)
-                        })
-                        logger.warning(f"Row {row_num}: {error_msg}")
-                        continue
-                    
-                    try:
-                        year = int(year_str)
-                    except ValueError:
-                        error_count += 1
-                        error_msg = f"Invalid year format: '{year_str}'"
-                        errors.append({
-                            "row_num": row_num,
-                            "error": error_msg,
-                            "row_data": str(row)
-                        })
-                        logger.warning(f"Row {row_num}: {error_msg}")
-                        continue
-                    
-                    genres = row.get('genres', '').strip()
-                    rating_str = row.get('rating', '').strip()
-                    
-                    rating = None
-                    if rating_str:
-                        try:
-                            rating = float(rating_str)
-                        except ValueError:
-                            pass  # Rating is optional
-                    
-                    movie = Movie(
-                        movie_name=movie_name,
-                        year=year,
-                        genres=genres,
-                        rating=rating
-                    )
-                    batch.append(movie)
-                    
-                    # Batch insert
-                    if len(batch) >= batch_size:
-                        session.add_all(batch)
-                        session.commit()
-                        imported_count += len(batch)
-                        batch = []
-                
-                except Exception as e:
-                    error_count += 1
-                    error_msg = f"Unexpected error: {str(e)}"
-                    errors.append({
-                        "row_num": row_num,
-                        "error": error_msg,
-                        "row_data": str(row)
-                    })
-                    logger.error(f"Row {row_num}: {error_msg}", exc_info=True)
-                    continue
-            
-            # Insert remaining batch
-            if batch:
-                session.add_all(batch)
-                session.commit()
-                imported_count += len(batch)
-        
-        # Write error log if there were errors
-        log_file_path = None
-        if errors:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            unique_id = uuid4().hex[:8]
-            log_filename = f"import_errors_{timestamp}_{unique_id}.log"
-            log_file_path = os.path.join(IMPORT_LOGS_DIR, log_filename)
-            try:
-                _write_error_log(errors, log_file_path)
-                logger.info(f"Error log written to: {log_file_path}")
-            except Exception as e:
-                logger.error(f"Failed to write error log: {str(e)}", exc_info=True)
-                # Still include the path in the result so user knows we tried to create it
-                # The file may not exist, but at least they know where it should be
-                log_file_path = log_file_path
-        
-        return {
-            "status": "completed",
-            "imported": imported_count,
-            "errors": error_count,
-            "total_rows": total_rows,
-            "error_log": log_file_path
-        }
-        
-    except HTTPException:
-        session.rollback()
-        raise
-    except Exception as e:
-        session.rollback()
-        raise HTTPException(status_code=500, detail=f"Error importing movies: {str(e)}")
 

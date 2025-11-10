@@ -13,7 +13,7 @@ from sqlmodel import Session, select, delete
 from app.celery_app import celery_app
 from app.database import engine
 from app.models import Movie
-from app.services import IMPORT_LOGS_DIR, _write_error_log, cleanup_expired_exports, validate_movie_name
+from app.services import IMPORT_LOGS_DIR, _write_error_log, cleanup_expired_exports, parse_and_validate_movie_row
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -72,61 +72,18 @@ def import_movies_task(self, file_path: str):
             
             for row_num, row in enumerate(reader, start=1):
                 try:
-                    # Validate and parse row
-                    movie_name = row.get('movie_name', '').strip()
-                    is_valid, validation_error = validate_movie_name(movie_name)
-                    if not is_valid:
+                    # Parse and validate row using shared function
+                    movie, error_msg = parse_and_validate_movie_row(row, row_num)
+                    if movie is None:
                         error_count += 1
-                        error_msg = validation_error or "Missing required field: movie_name"
                         errors.append({
                             "row_num": row_num,
-                            "error": error_msg,
+                            "error": error_msg or "Invalid row",
                             "row_data": str(row)
                         })
                         logger.warning(f"Row {row_num}: {error_msg}")
                         continue
                     
-                    year_str = row.get('year', '').strip()
-                    if not year_str:
-                        error_count += 1
-                        error_msg = "Missing required field: year"
-                        errors.append({
-                            "row_num": row_num,
-                            "error": error_msg,
-                            "row_data": str(row)
-                        })
-                        logger.warning(f"Row {row_num}: {error_msg}")
-                        continue
-                    
-                    try:
-                        year = int(year_str)
-                    except ValueError:
-                        error_count += 1
-                        error_msg = f"Invalid year format: '{year_str}'"
-                        errors.append({
-                            "row_num": row_num,
-                            "error": error_msg,
-                            "row_data": str(row)
-                        })
-                        logger.warning(f"Row {row_num}: {error_msg}")
-                        continue
-                    
-                    genres = row.get('genres', '').strip()
-                    rating_str = row.get('rating', '').strip()
-                    
-                    rating = None
-                    if rating_str:
-                        try:
-                            rating = float(rating_str)
-                        except ValueError:
-                            pass  # Rating is optional
-                    
-                    movie = Movie(
-                        movie_name=movie_name,
-                        year=year,
-                        genres=genres,
-                        rating=rating
-                    )
                     batch.append(movie)
                     
                     # Batch insert
