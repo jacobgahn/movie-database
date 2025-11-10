@@ -12,6 +12,9 @@ ENV PATH="/root/.local/bin:${PATH}"
 # Set working directory
 WORKDIR /app
 
+# Configure uv to use a container-specific venv location (not .venv which might conflict with mounted volumes)
+ENV UV_PROJECT_ENVIRONMENT=/app/.venv-container
+
 # Copy dependency files
 COPY pyproject.toml uv.lock ./
 

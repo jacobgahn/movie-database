@@ -10,6 +10,7 @@ dist
 build
 .env
 .venv
+.venv-container
 venv/
 env/
 *.db
@@ -24,3 +25,5 @@ htmlcov/
 .dmypy.json
 dmypy.json
 data/
+uploads/
+exports/

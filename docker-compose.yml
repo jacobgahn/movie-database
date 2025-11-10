@@ -24,6 +24,7 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - UV_PROJECT_ENVIRONMENT=/app/.venv-container
     depends_on:
       redis:
         condition: service_healthy
@@ -38,6 +39,7 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - UV_PROJECT_ENVIRONMENT=/app/.venv-container
     depends_on:
       redis:
         condition: service_healthy
