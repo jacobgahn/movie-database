@@ -38,5 +38,3 @@ Some basic integration tests were added to test validation. These use an sqlite 
 - Filter movies before exporting, useful feature?
 - Worker queue priority tweaking
 - Blocking import if import is already in progress
-- Cronjob to clean up expired exports
-- Error logs on importing csv

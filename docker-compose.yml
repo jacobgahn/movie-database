@@ -28,7 +28,20 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-    command: ["uv", "run", "fastapi", "dev", "main.py", "--host", "0.0.0.0", "--port", "8000"]
+    command: [
+      "uv", "run", "uvicorn", "main:app",
+      "--host", "0.0.0.0",
+      "--port", "8000",
+      "--reload",
+      "--reload-exclude", "import_logs/*",
+      "--reload-exclude", "uploads/*",
+      "--reload-exclude", "exports/*",
+      "--reload-exclude", "data/*",
+      "--reload-exclude", ".venv-container/*",
+      "--reload-exclude", "*.log",
+      "--reload-exclude", "*.db",
+      "--reload-exclude", "__pycache__/*"
+    ]
 
   celery:
     build: .
