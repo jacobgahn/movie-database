@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from contextlib import asynccontextmanager
 from app.database import init_db
 
 app = FastAPI(
@@ -6,12 +7,11 @@ app = FastAPI(
     version="1.0.0",
 )
 
-
-@app.on_event("startup")
-def on_startup():
-    """Initialize database on startup"""
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     init_db()
 
+    yield
 
 from app.movies import router as movies_router
 

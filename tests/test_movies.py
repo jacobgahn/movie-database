@@ -23,7 +23,7 @@ class TestUploadMovies:
             "/movies",
             files={"file": ("", b"content", "text/csv")}
         )
-        assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+        assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
 
     def test_upload_movies_invalid_extension(self, client):
         """Test upload with non-CSV file"""
@@ -395,7 +395,7 @@ class TestQueryMovies:
         )
         
         # FastAPI returns 422 for validation errors
-        assert response.status_code in (status.HTTP_400_BAD_REQUEST, status.HTTP_422_UNPROCESSABLE_ENTITY)
+        assert response.status_code in (status.HTTP_400_BAD_REQUEST, status.HTTP_422_UNPROCESSABLE_CONTENT)
     
     def test_query_movies_invalid_year_range(self, client):
         """Test query with start_year > end_year"""
