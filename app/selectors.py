@@ -1,8 +1,10 @@
 """
 Selector layer for database queries and job status queries.
 """
-from typing import List
+from typing import List, Tuple, cast, Literal
 from sqlmodel import Session, select
+from sqlalchemy import func
+from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.exc import SQLAlchemyError
 from fastapi import HTTPException
 from app.models import Movie, JobStatusResponse
@@ -13,8 +15,10 @@ def search_movies(
     session: Session,
     start_year: int,
     end_year: int,
-    genre: str | None = None
-) -> List[Movie]:
+    genre: str | None = None,
+    page: int = 1,
+    page_size: int = 25
+) -> Tuple[List[Movie], int]:
     """
     Query movies by year range and optional genre.
     
@@ -25,34 +29,53 @@ def search_movies(
         genre: Optional genre to filter by
         
     Returns:
-        List of Movie objects matching the criteria
+        Tuple containing the list of Movie objects for the requested page and the total number of matching records
         
     Raises:
         HTTPException: If database error occurs
     """
     try:
-        # Build query
-        statement = select(Movie).where(
-            Movie.year >= start_year,
-            Movie.year <= end_year
-        )
-        
-        # Filter by genre if provided
+        # Build query filters
+        year_column = cast(ColumnElement[int], Movie.year)
+        id_column = cast(ColumnElement[int], Movie.id)
+        genres_column = cast(ColumnElement[str], Movie.genres)
+
+        filters = [
+            year_column >= start_year,
+            year_column <= end_year,
+        ]
+
         if genre:
             # Genre is stored as comma-separated string, so we check if it contains the genre
-            statement = statement.where(Movie.genres.contains(genre))
-        
-        # Execute query
+            filters.append(genres_column.contains(genre))
+
+        # Count total matching records
+        total_statement = select(func.count()).select_from(Movie).where(*filters)
+        total_result = session.exec(total_statement).one()
+        total_items = total_result if isinstance(total_result, int) else total_result[0]
+
+        # Execute paginated query
+        statement = (
+            select(Movie)
+            .where(*filters)
+            .order_by(year_column, id_column)
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+
         movies = session.exec(statement).all()
-        
-        return list(movies)
+
+        return list(movies), total_items
     except SQLAlchemyError as e:
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error querying movies: {str(e)}")
 
 
-def get_job_type(job_id: str) -> str:
+JobType = Literal["export", "import"]
+
+
+def get_job_type(job_id: str) -> JobType:
     """
     Get the job type (export or import) from a job ID.
     
@@ -63,13 +86,15 @@ def get_job_type(job_id: str) -> str:
         "export" or "import" (defaults to "import" if cannot be determined)
     """
     task = celery_app.AsyncResult(job_id)
-    job_type = "unknown"  # default
+    job_type: JobType = "import"  # default
     
     try:
         # Try to get job_type from task metadata (available when task is running or has run)
         if task.info:
             if isinstance(task.info, dict):
-                job_type = task.info.get('job_type', job_type)
+                candidate = task.info.get('job_type')
+                if candidate in ("export", "import"):
+                    job_type = candidate
             # For FAILURE state, task.info might be a string, so check backend metadata
             elif task.state == 'FAILURE':
                 if hasattr(task, 'backend') and task.backend:
@@ -79,11 +104,13 @@ def get_job_type(job_id: str) -> str:
                             # Check the last known metadata
                             meta = task_meta.get('meta', {})
                             if isinstance(meta, dict):
-                                job_type = meta.get('job_type', job_type)
+                                candidate = meta.get('job_type')
+                                if candidate in ("export", "import"):
+                                    job_type = candidate
                     except Exception:
                         pass
         # Fallback: check result structure if task is completed and type is still unknown
-        if job_type == "unknown" and task.state == 'SUCCESS' and task.result:
+        if task.state == 'SUCCESS' and task.result and job_type == "import":
             result = task.result if isinstance(task.result, dict) else {}
             if "file_path" in result or "exported" in result:
                 job_type = "export"

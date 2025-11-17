@@ -347,92 +347,170 @@ Test Movie,2020,Action Comedy,8.5"""
 
 class TestQueryMovies:
     """Tests for GET /movies endpoint"""
-    
+
     def test_query_movies_by_year_range(self, client, sample_movies):
         """Test querying movies by year range"""
         response = client.get(
             "/movies",
             params={"start_year": "2000", "end_year": "2010", "genre": ""}
         )
-        
+
         assert response.status_code == status.HTTP_200_OK
         data = response.json()
-        assert len(data) == 2  # Inception (2010) and The Dark Knight (2008)
-        movie_years = [movie["year"] for movie in data]
+
+        assert data["page"] == 1
+        assert data["page_size"] == 25
+        assert data["total_items"] == 2
+        assert data["total_pages"] == 1
+
+        items = data["items"]
+        assert len(items) == 2  # Inception (2010) and The Dark Knight (2008)
+
+        movie_years = [movie["year"] for movie in items]
         assert 2008 in movie_years
         assert 2010 in movie_years
-    
+
     def test_query_movies_by_year_range_and_genre(self, client, sample_movies):
         """Test querying movies by year range and genre"""
         response = client.get(
             "/movies",
             params={"start_year": "2000", "end_year": "2010", "genre": "Action"}
         )
-        
+
         assert response.status_code == status.HTTP_200_OK
         data = response.json()
-        assert len(data) == 2  # Inception and The Dark Knight
-        for movie in data:
+
+        assert data["total_items"] == 2
+        assert data["total_pages"] == 1
+
+        items = data["items"]
+        assert len(items) == 2  # Inception and The Dark Knight
+
+        for movie in items:
             assert "Action" in movie["genres"]
             assert 2000 <= movie["year"] <= 2010
-    
+
     def test_query_movies_no_results(self, client, sample_movies):
         """Test query with no matching results"""
         response = client.get(
             "/movies",
             params={"start_year": "2020", "end_year": "2025", "genre": ""}
         )
-        
+
         assert response.status_code == status.HTTP_200_OK
         data = response.json()
-        assert len(data) == 0
-    
+
+        assert data["total_items"] == 0
+        assert data["total_pages"] == 0
+        assert data["items"] == []
+
     def test_query_movies_invalid_year_format(self, client):
         """Test query with invalid year format"""
         response = client.get(
             "/movies",
             params={"start_year": "not-a-year", "end_year": "2010", "genre": ""}
         )
-        
+
         # FastAPI returns 422 for validation errors
         assert response.status_code in (status.HTTP_400_BAD_REQUEST, status.HTTP_422_UNPROCESSABLE_CONTENT)
-    
+
     def test_query_movies_invalid_year_range(self, client):
         """Test query with start_year > end_year"""
         response = client.get(
             "/movies",
             params={"start_year": "2010", "end_year": "2000", "genre": ""}
         )
-        
+
         assert response.status_code == status.HTTP_400_BAD_REQUEST
         assert "start_year must be less than or equal to end_year" in response.json()["detail"]
 
-    
     def test_query_movies_all_genres(self, client, sample_movies):
         """Test querying all movies in a year range"""
         response = client.get(
             "/movies",
             params={"start_year": "1990", "end_year": "2020", "genre": ""}
         )
-        
+
         assert response.status_code == status.HTTP_200_OK
         data = response.json()
-        assert len(data) == 5  # All sample movies
-    
+
+        assert data["total_items"] == 5  # All sample movies
+        assert data["total_pages"] == 1
+        assert len(data["items"]) == 5
+
     def test_query_movies_specific_genre(self, client, sample_movies):
         """Test querying by specific genre"""
         response = client.get(
             "/movies",
             params={"start_year": "1990", "end_year": "2020", "genre": "Sci-Fi"}
         )
-        
+
         assert response.status_code == status.HTTP_200_OK
         data = response.json()
+
         # Should return The Matrix, Inception, and Interstellar
-        assert len(data) == 3
-        for movie in data:
+        assert data["total_items"] == 3
+        assert data["total_pages"] == 1
+
+        for movie in data["items"]:
             assert "Sci-Fi" in movie["genres"]
 
+    def test_query_movies_custom_page_size(self, client, sample_movies):
+        """Test paging with a custom page_size"""
+        response = client.get(
+            "/movies",
+            params={
+                "start_year": "1990",
+                "end_year": "2020",
+                "genre": "",
+                "page_size": "2"
+            }
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        data = response.json()
+
+        assert data["page_size"] == 2
+        assert data["total_items"] == 5
+        assert data["total_pages"] == 3
+        assert len(data["items"]) == 2
+
+    def test_query_movies_second_page(self, client, sample_movies):
+        """Ensure pagination offset works"""
+        response = client.get(
+            "/movies",
+            params={
+                "start_year": "1990",
+                "end_year": "2020",
+                "genre": "",
+                "page": "2",
+                "page_size": "2"
+            }
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        data = response.json()
+
+        assert data["page"] == 2
+        assert len(data["items"]) == 2
+
+        movie_names = [movie["movie_name"] for movie in data["items"]]
+        assert "The Dark Knight" in movie_names
+        assert "Inception" in movie_names
+
+    def test_query_movies_page_size_too_large(self, client, sample_movies):
+        """page_size above allowed maximum should error"""
+        response = client.get(
+            "/movies",
+            params={
+                "start_year": "1990",
+                "end_year": "2020",
+                "genre": "",
+                "page_size": "250"
+            }
+        )
+
+        assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
 
 class TestRequestMoviesZip:
     """Tests for GET /movies/zip endpoint"""

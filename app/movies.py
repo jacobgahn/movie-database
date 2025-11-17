@@ -1,10 +1,10 @@
+import math
 import os
-from typing import List
-from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Query
 from fastapi.responses import FileResponse
 from sqlmodel import Session
 from app.database import get_session
-from app.models import Movie, JobStatusResponse, JobCreatedResponse
+from app.models import JobStatusResponse, JobCreatedResponse, PaginatedMoviesResponse
 from app.tasks import import_movies_task, export_movies_zip_task
 from app.celery_app import celery_app
 from app.services import save_uploaded_file, EXPORT_DIR, IMPORT_LOGS_DIR, cleanup_expired_exports, is_export_expired
@@ -47,13 +47,15 @@ async def upload_movies(file: UploadFile = File(...)) -> JobCreatedResponse:
         raise HTTPException(status_code=500, detail=f"Error starting import task: {str(e)}")
 
 
-@router.get("/movies")
+@router.get("/movies", response_model=PaginatedMoviesResponse)
 async def query_movies(
     start_year: int,
     end_year: int,
     genre: str | None = None,
+    page: int | None = Query(default=1, ge=1),
+    page_size: int | None = Query(default=25, ge=1, le=100),
     session: Session = Depends(get_session)
-) -> List[Movie]:
+) -> PaginatedMoviesResponse:
     """
     Search movies by query parameters.
     """
@@ -64,15 +66,28 @@ async def query_movies(
             detail="start_year must be less than or equal to end_year"
         )
     
+    # Normalize genre filter
+    normalized_genre = genre.strip() if genre and genre.strip() else None
+
     # Query movies using selector layer
-    movies = search_movies(
+    items, total_items = search_movies(
         session=session,
         start_year=start_year,
         end_year=end_year,
-        genre=genre if genre else None
+        genre=normalized_genre,
+        page=page,
+        page_size=page_size
     )
-    
-    return movies
+
+    total_pages = math.ceil(total_items / page_size) if total_items else 0
+
+    return PaginatedMoviesResponse(
+        page=page,
+        page_size=page_size,
+        total_items=total_items,
+        total_pages=total_pages,
+        items=items
+    )
 
 
 @router.get("/movies/zip", response_model=JobCreatedResponse)

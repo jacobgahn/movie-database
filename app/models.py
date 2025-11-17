@@ -1,5 +1,5 @@
 from sqlmodel import SQLModel, Field, Index
-from typing import Optional, Literal, Any
+from typing import Optional, Literal, Any, List
 from pydantic import BaseModel
 
 
@@ -36,4 +36,13 @@ class JobStatusResponse(BaseModel):
     total: Optional[int] = None
     result: Optional[Any] = None
     error: Optional[str] = None
+
+
+class PaginatedMoviesResponse(BaseModel):
+    """Paginated response for movie queries"""
+    page: int
+    page_size: int
+    total_items: int
+    total_pages: int
+    items: List[Movie]
 
