@@ -58,18 +58,15 @@ async def query_movies(
 ) -> PaginatedMoviesResponse:
     """
     Search movies by query parameters.
-    """
-    # Validate year range
+    """    
     if start_year > end_year:
         raise HTTPException(
             status_code=400,
             detail="start_year must be less than or equal to end_year"
         )
-    
-    # Normalize genre filter
+        
     normalized_genre = genre.strip() if genre and genre.strip() else None
 
-    # Query movies using selector layer
     items, total_items = search_movies(
         session=session,
         start_year=start_year,
@@ -149,9 +146,8 @@ async def download_job_result(job_id: str):
     if not file_path or not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="Export file not found")
     
-    # Check if export file has expired
-    if is_export_expired(file_path):
-        # Delete the expired file
+    # Delete expired export file
+    if is_export_expired(file_path):        
         try:
             os.remove(file_path)
         except OSError:
@@ -197,24 +193,20 @@ async def download_error_log(log_filename: str):
             detail="Invalid log filename. Path traversal not allowed"
         )
     
-    # Validate filename format (should match import_errors_*.log pattern)
     if not log_filename.startswith('import_errors_'):
         raise HTTPException(
             status_code=400,
             detail="Invalid log filename format"
         )
     
-    # Construct full file path
     file_path = os.path.join(IMPORT_LOGS_DIR, log_filename)
     
-    # Verify file exists
     if not os.path.exists(file_path):
         raise HTTPException(
             status_code=404,
             detail=f"Error log file '{log_filename}' not found"
         )
     
-    # Verify it's actually a file (not a directory)
     if not os.path.isfile(file_path):
         raise HTTPException(
             status_code=400,

@@ -1,11 +1,9 @@
 import os
 from celery import Celery
 
-# Get Redis URL from environment, default to localhost for non-Docker usage
 redis_url = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
 result_backend = os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/0")
 
-# Create Celery app
 celery_app = Celery(
     "movies_backend",
     broker=redis_url,
@@ -13,7 +11,6 @@ celery_app = Celery(
     include=["app.tasks"],  # Include tasks module
 )
 
-# Celery configuration
 celery_app.conf.update(
     task_serializer="json",
     accept_content=["json"],

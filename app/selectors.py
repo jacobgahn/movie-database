@@ -35,7 +35,6 @@ def search_movies(
         HTTPException: If database error occurs
     """
     try:
-        # Build query filters
         year_column = cast(ColumnElement[int], Movie.year)
         id_column = cast(ColumnElement[int], Movie.id)
         genres_column = cast(ColumnElement[str], Movie.genres)
@@ -49,12 +48,10 @@ def search_movies(
             # Genre is stored as comma-separated string, so we check if it contains the genre
             filters.append(genres_column.contains(genre))
 
-        # Count total matching records
         total_statement = select(func.count()).select_from(Movie).where(*filters)
         total_result = session.exec(total_statement).one()
         total_items = total_result if isinstance(total_result, int) else total_result[0]
 
-        # Execute paginated query
         statement = (
             select(Movie)
             .where(*filters)
@@ -117,7 +114,7 @@ def get_job_type(job_id: str) -> JobType:
             elif "imported" in result:
                 job_type = "import"
     except Exception:
-        # If we can't determine type, default to import
+        # TODO: Handle this job type error
         pass
     
     return job_type
@@ -142,12 +139,10 @@ def get_job_status(job_id: str) -> JobStatusResponse:
     try:
         task = celery_app.AsyncResult(job_id)
         
-        # Get job type from task metadata
         job_type = get_job_type(job_id)
         
-        # Check if task exists
         if task.state == 'PENDING' and not task.ready():
-            # Task might not exist
+            # Give a little time for task to fully start and exist
             try:
                 task.get(timeout=0.1)
             except:

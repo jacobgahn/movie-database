@@ -14,25 +14,18 @@ from sqlmodel import Session, delete
 from app.models import Movie
 
 
-# Directory for storing uploaded files
 UPLOAD_DIR = "./uploads"
 EXPORT_DIR = "./exports"
 IMPORT_LOGS_DIR = "./import_logs"
 
-# Export artifact TTL (Time To Live) in hours
-# Can be overridden via environment variable EXPORT_TTL_HOURS
 EXPORT_TTL_HOURS = int(os.getenv("EXPORT_TTL_HOURS", "24"))
 EXPORT_TTL_SECONDS = EXPORT_TTL_HOURS * 3600
 
-# Configure logging
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
-# Maximum file size: 2GB (adjust as needed)
 MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024  # 2GB in bytes
 CHUNK_SIZE = 8192  # 8KB chunks for efficient streaming
-
-# Movie name validation constants
 MAX_MOVIE_NAME_LENGTH = 500  # Maximum length for movie names
 
 
@@ -51,7 +44,6 @@ def validate_movie_name(movie_name: str) -> tuple[bool, str | None]:
     if not movie_name:
         return False, "Movie name cannot be empty"
     
-    # Check length
     if len(movie_name) > MAX_MOVIE_NAME_LENGTH:
         return False, f"Movie name exceeds maximum length of {MAX_MOVIE_NAME_LENGTH} characters"
     
@@ -87,13 +79,11 @@ def parse_and_validate_movie_row(row: dict, row_num: int) -> tuple[Movie | None,
         - movie: Movie object if valid, None otherwise
         - error_message: None if valid, error description if invalid
     """
-    # Validate movie name
     movie_name = row.get('movie_name', '').strip()
     is_valid, validation_error = validate_movie_name(movie_name)
     if not is_valid:
         return None, validation_error or "Missing required field: movie_name"
     
-    # Validate year
     year_str = row.get('year', '').strip()
     if not year_str:
         return None, "Missing required field: year"
@@ -103,7 +93,6 @@ def parse_and_validate_movie_row(row: dict, row_num: int) -> tuple[Movie | None,
     except ValueError:
         return None, f"Invalid year format: '{year_str}'"
     
-    # Parse optional fields
     genres = row.get('genres', '').strip()
     rating_str = row.get('rating', '').strip()
     
@@ -114,7 +103,6 @@ def parse_and_validate_movie_row(row: dict, row_num: int) -> tuple[Movie | None,
         except ValueError:
             pass  # Rating is optional, invalid values become None
     
-    # Create Movie object
     try:
         movie = Movie(
             movie_name=movie_name,
@@ -175,11 +163,9 @@ def cleanup_expired_exports(export_dir: str = EXPORT_DIR) -> int:
             
             file_path = os.path.join(export_dir, filename)
             
-            # Skip if not a file
             if not os.path.isfile(file_path):
                 continue
             
-            # Check file age
             file_mtime = os.path.getmtime(file_path)
             file_age = current_time - file_mtime
             
